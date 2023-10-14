@@ -23,7 +23,7 @@ parser.add_argument('--cuda', default=True, type=bool, help='Enable or disable c
 parser.add_argument('--data-path', default='./data', help='path to load CIFAR10 data from',
                     dest='data_path')
 parser.add_argument('--dlw', default=2, type=int, help='Number of dataloader workers')
-parser.add_argument('--optimizer', default=None, type=str, help='Optimizer to use')
+parser.add_argument('--optimizer', default='sgd', type=str, help='Optimizer to use')
 args = parser.parse_args()
 
 if not torch.cuda.is_available() and args.cuda:
@@ -94,16 +94,22 @@ if args.resume:
 
 criterion = nn.CrossEntropyLoss()
 
-# TODO Check this optimizer
-if args.optimizer == "sgd":
+if args.optimizer == "sgd+n":
     optimizer = optim.SGD(net.parameters(), lr=args.lr,
-                          momentum=0.9, weight_decay=5e-4)
+                            momentum=0.9, weight_decay=5e-4)
+elif args.optimizer == "adagrad":
+    optimizer = optim.Adagrad(net.parameters(), lr=args.lr,
+                              weight_decay=5e-4)
+elif args.optimizer == "adadelta":
+    optimizer = optim.Adadelta(net.parameters(), lr=args.lr,
+                              weight_decay=5e-4)
+elif args.optimizer == "adam":
+    optimizer = optim.Adam(net.parameters(), lr=args.lr,
+                              weight_decay=5e-4)
 else:
-    optimizer = None
-
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, weight_decay=5e-4)
 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
-
 
 # Training
 def train(epoch):
@@ -114,13 +120,11 @@ def train(epoch):
     total = 0
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
-        if optimizer is not None:
-            optimizer.zero_grad()
+        optimizer.zero_grad()
         outputs = net(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
-        if optimizer is not None:
-            optimizer.step()
+        optimizer.step()
 
         train_loss += loss.item()
         _, predicted = outputs.max(1)
@@ -129,8 +133,8 @@ def train(epoch):
 
         # progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
         #              % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-        print('Loss: %.3f | Acc: %.3f%% (%d/%d)'
-              % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+    print('Loss: %.3f | Acc: %.3f%% (%d/%d)'
+            % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
 
 def test(epoch):
@@ -152,8 +156,8 @@ def test(epoch):
 
             # progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
                          # % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
-            print('Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                  % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+        print('Loss: %.3f | Acc: %.3f%% (%d/%d)'
+              % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
     # Save checkpoint.
     acc = 100.*correct/total
