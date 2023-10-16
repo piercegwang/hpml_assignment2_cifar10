@@ -15,7 +15,7 @@ module load cuda11.7/toolkit
 module load anaconda
 
 echo "Running script"
-python main.py
+python lab2.py 2>/dev/null
 date
 echo "Done"
 

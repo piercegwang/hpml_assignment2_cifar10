@@ -14,52 +14,31 @@ from time import perf_counter
 
 from models import *
 
-parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
-parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-parser.add_argument('--resume', '-r', action='store_true',
-                    help='resume from checkpoint')
-parser.add_argument('--cuda', default=True, type=bool, help='Enable or disable cuda')
-parser.add_argument('--data-path', default='./data', help='path to load CIFAR10 data from',
-                    dest='data_path')
-parser.add_argument('--dlw', default=2, type=int, help='Number of dataloader workers')
-parser.add_argument('--optimizer', default='sgd', type=str, help='Optimizer to use')
-args = parser.parse_args()
-
-if not torch.cuda.is_available() and args.cuda:
-    exit()
-
-device = 'cuda' if args.cuda else 'cpu'
+data_loader_cumulative = 0
 best_acc = 0  # best test accuracy
-start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
-dataloader_time = [0,0]
-minibatch_training_time = [0,0]
-total_running_time = [0,0]
-
-# Data
-print('==> Preparing data..')
-transform_train = transforms.Compose([
-    transforms.RandomCrop(32, padding=4),
-    transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-])
-
-transform_test = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-])
+def data_loader_wrapper(dataloader):
+    global data_loader_cumulative
+    dataloader_iter = iter(dataloader)
+    while True:
+        data_loader_start = perf_counter()
+        try:
+            data = next(dataloader_iter)
+            data_loader_end = perf_counter()
+            data_loader_cumulative += data_loader_end - data_loader_start
+            yield data
+        except StopIteration:
+            return None
 
 # Training
-def train(epoch, trainloader, net, optimizer, criterion):
+def train(device, epoch, trainloader, net, optimizer, criterion):
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
     correct = 0
     total = 0
-    minibatch_training_time = [0, 0]
-    minibatch_training_time[0] = perf_counter()
-    for batch_idx, (inputs, targets) in enumerate(trainloader):
+    trainloader_wrapped = data_loader_wrapper(trainloader)
+    for batch_idx, (inputs, targets) in enumerate(trainloader_wrapped):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         outputs = net(inputs)
@@ -72,15 +51,15 @@ def train(epoch, trainloader, net, optimizer, criterion):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
+    # this includes dataloading time, but that should be ok? Check on ed
+
         # progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
         #              % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-    minibatch_training_time[1] = perf_counter()
-    print('Loss: %.3f | Acc: %.3f%% (%d/%d) | Avg Minibatch Training: %.3f s'
-          % (train_loss/(batch_idx+1), 100.*correct/total, correct, total,
-             (minibatch_training_time[1] - minibatch_training_time[0])/len(trainloader)))
+    print('Loss: %.3f | Acc: %.3f%% (%d/%d)'
+          % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
 
-def test(epoch, testloader, net, optimizer, criterion):
+def test(device, epoch, testloader, net, optimizer, criterion):
     global best_acc
     net.eval()
     test_loss = 0
@@ -116,16 +95,54 @@ def test(epoch, testloader, net, optimizer, criterion):
         torch.save(state, './checkpoint/ckpt.pth')
         best_acc = acc
 
-trainset = torchvision.datasets.CIFAR10(
-    root=args.data_path, train=True, download=True, transform=transform_train)
-testset = torchvision.datasets.CIFAR10(
-    root=args.data_path, train=False, download=True, transform=transform_test)
-
 def main():
-    global best_acc, start_epoch
-    global dataloader_time, minibatch_training_time, total_running_time
-    global trainset, testset
+    global data_loader_cumulative, best_acc
+    parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
+    parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+    parser.add_argument('--resume', '-r', action='store_true',
+                        help='resume from checkpoint')
+    parser.add_argument('--cuda', default=True, type=bool, help='Enable or disable cuda')
+    parser.add_argument('--data-path', default='./data', help='path to load CIFAR10 data from',
+                        dest='data_path')
+    parser.add_argument('--dlw', default=2, type=int, help='Number of dataloader workers')
+    parser.add_argument('--optimizer', default='sgd', type=str, help='Optimizer to use')
+    args = parser.parse_args()
+
+    if not torch.cuda.is_available() and args.cuda:
+        exit()
+
+    device = 'cuda' if args.cuda else 'cpu'
+    start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+
+    dataloader_time = [0,0]
+    minibatch_training_time = [0,0]
+    total_running_time = [0,0]
+
+    # Data
+    print('==> Preparing data..')
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+
     print('-- Creating dataloaders with num_workers = %d' % args.dlw)
+
+    trainset = torchvision.datasets.CIFAR10(
+        root=args.data_path, train=True, download=True, transform=transform_train)
+    testset = torchvision.datasets.CIFAR10(
+        root=args.data_path, train=False, download=True, transform=transform_test)
+
+    trainloader = torch.utils.data.DataLoader(
+        trainset, batch_size=128, shuffle=True, num_workers=args.dlw)
+    testloader = torch.utils.data.DataLoader(
+        testset, batch_size=100, shuffle=False, num_workers=args.dlw)
 
     classes = ('plane', 'car', 'bird', 'cat', 'deer',
             'dog', 'frog', 'horse', 'ship', 'truck')
@@ -167,19 +184,18 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
     for epoch in range(start_epoch, start_epoch+5):
-        dataloader_time[0] = perf_counter()
-        trainloader = torch.utils.data.DataLoader(
-            trainset, batch_size=128, shuffle=True, num_workers=args.dlw)
-        testloader = torch.utils.data.DataLoader(
-            testset, batch_size=100, shuffle=False, num_workers=args.dlw)
-        dataloader_time[1] = perf_counter()
-
+        data_loader_cumulative = 0
         total_running_time[0] = perf_counter()
-        train(epoch, trainloader, net, optimizer, criterion)
-        test(epoch, testloader, net, optimizer, criterion)
+        total_training_time = [0, 0]
+        total_training_time[0] = perf_counter()
+        train(device, epoch, trainloader, net, optimizer, criterion)
+        total_training_time[1] = perf_counter()
+        test(device, epoch, testloader, net, optimizer, criterion)
         scheduler.step()
         total_running_time[1] = perf_counter()
-        print('-> Data Loading Time: %.3f s' % (dataloader_time[1] - dataloader_time[0]))
+        print('-> Data Loading Time: %.3f s' % (data_loader_cumulative))
+        print('-> Total Mini-batch Calculation Time: %.3f s' % (total_training_time[1] - total_training_time[0] - data_loader_cumulative))
         print('-> Total Running Time: %.3f s' % (total_running_time[1] - total_running_time[0]))
 
-main()
+if __name__ == "__main__":
+    main()
