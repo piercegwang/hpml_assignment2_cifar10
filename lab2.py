@@ -15,7 +15,6 @@ from time import perf_counter
 from models import *
 
 data_loader_cumulative = 0
-best_acc = 0  # best test accuracy
 
 def data_loader_wrapper(dataloader):
     global data_loader_cumulative
@@ -59,8 +58,7 @@ def train(device, epoch, trainloader, net, optimizer, criterion):
           % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
 
-def test(device, epoch, testloader, net, optimizer, criterion):
-    global best_acc
+def test(device, epoch, best_acc, testloader, net, optimizer, criterion):
     net.eval()
     test_loss = 0
     correct = 0
@@ -101,17 +99,19 @@ def main():
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
     parser.add_argument('--resume', '-r', action='store_true',
                         help='resume from checkpoint')
-    parser.add_argument('--cuda', default=True, type=bool, help='Enable or disable cuda')
+    parser.add_argument('--cuda', default=1, type=int, help='1: Enable cuda, 2: Disable cuda', dest='cuda')
     parser.add_argument('--data-path', default='./data', help='path to load CIFAR10 data from',
                         dest='data_path')
     parser.add_argument('--dlw', default=2, type=int, help='Number of dataloader workers')
     parser.add_argument('--optimizer', default='sgd', type=str, help='Optimizer to use')
+    parser.add_argument('--no-norm', default=0, dest='nonorm', type=int, help='1: No norms, 2 (Default): Use Batch Norms')
     args = parser.parse_args()
 
-    if not torch.cuda.is_available() and args.cuda:
+    if not torch.cuda.is_available() and args.cuda != 0:
         exit()
 
-    device = 'cuda' if args.cuda else 'cpu'
+    device = 'cuda' if args.cuda != 0 else 'cpu'
+    best_acc = 0  # best test accuracy
     start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
     dataloader_time = [0,0]
@@ -122,6 +122,7 @@ def main():
     print('==> Preparing data..')
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
+
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
@@ -149,7 +150,11 @@ def main():
 
     # Model
     print('==> Building model..')
-    net = ResNet18()
+    print(args.nonorm)
+    if args.nonorm == 1:
+        net = ResNet18NoNorm()
+    else:
+        net = ResNet18()
     net = net.to(device)
     if device == 'cuda':
         net = torch.nn.DataParallel(net)
@@ -183,6 +188,16 @@ def main():
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 
+    pytorch_trainable_parameters = 0
+    pytorch_gradients = 0
+    for parameter in net.parameters():
+        if parameter.requires_grad:
+            pytorch_trainable_parameters += parameter.numel()
+            pytorch_gradients += 1
+
+    print(f'PyTorch Total Trainable Parameters: {pytorch_trainable_parameters}')
+    print(f'PyTorch Gradients: {pytorch_gradients}')
+
     for epoch in range(start_epoch, start_epoch+5):
         data_loader_cumulative = 0
         total_running_time[0] = perf_counter()
@@ -190,12 +205,14 @@ def main():
         total_training_time[0] = perf_counter()
         train(device, epoch, trainloader, net, optimizer, criterion)
         total_training_time[1] = perf_counter()
-        test(device, epoch, testloader, net, optimizer, criterion)
+        test(device, epoch, best_acc, testloader, net, optimizer, criterion)
         scheduler.step()
         total_running_time[1] = perf_counter()
-        print('-> Data Loading Time: %.3f s' % (data_loader_cumulative))
-        print('-> Total Mini-batch Calculation Time: %.3f s' % (total_training_time[1] - total_training_time[0] - data_loader_cumulative))
-        print('-> Total Running Time: %.3f s' % (total_running_time[1] - total_running_time[0]))
+        print('| Data Loading (s) | Mini-batch Calculation (s) | Running (s) |')
+        print('| %.3f | %.3f | %.3f |'
+              % (data_loader_cumulative,
+                 total_training_time[1] - total_training_time[0] - data_loader_cumulative,
+                 total_running_time[1] - total_running_time[0]))
 
 if __name__ == "__main__":
     main()
