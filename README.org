@@ -17,3 +17,26 @@ For running all of the code from ~C1~ to ~C7~, use the following:
 #+begin_src bash
 bash sbatch/run_all.sh
 #+end_src
+** Structure of Repository
+#+begin_src artist
+.
+├── README.md
+├── lab2.py
+├── models/
+│   ├── __init__.py
+│   ├── resnet_no_batchnorm.py
+│   └── resnet.py
+└── sbatch/
+    ├── C1.sh
+    ├── C2.sh
+    ├── C3.sh
+    ├── C4.sh
+    ├── C5_1.sh
+    ├── C5_2.sh
+    ├── C6.sh
+    ├── C7.sh
+    ├── Q3.sh
+    ├── Q4.sh
+    └── run_all.sh
+
+#+end_src
